@@ -1,0 +1,102 @@
+import { streamBufferedToolTextCompletionEvents } from "./runtime";
+import type { CompletionProvider } from "./ports";
+import type { ResolvedModel } from "../models";
+import { upstreamErrorMessage } from "../shared/runtime";
+import { addTokenCharCounts, createTokenCounter, tokenCountFromCounts } from "../shared/tokens";
+import type { TokenCharCounts } from "../shared/tokens";
+import { parseGoogleFunctionCalls } from "../toolcall/google";
+import { validateGoogleFunctionCalls } from "../toolcall/policy-google";
+import type { ToolPolicyViolation } from "../toolcall/policy-openai";
+import type { GoogleFunctionCall } from "../toolcall/google";
+import type { GoogleResponsePart } from "./google-turn";
+import type { FileRef, LooseRequest } from "./types";
+import { EMPTY_UPSTREAM_MSG } from "./turn";
+
+export type GoogleToolCompletionEvent =
+  | { type: "candidate"; parts: GoogleResponsePart[] | null; finishReason: string | null }
+  | { type: "warning"; error: unknown; message?: string }
+  | { type: "tool_policy_violation"; violation: ToolPolicyViolation }
+  | { type: "done"; usageMetadata: { promptTokenCount: number; candidatesTokenCount: number; totalTokenCount: number } };
+
+type GoogleToolCompletionParams = {
+  prompt: string;
+  rm: Extract<ResolvedModel, { name: string }>;
+  fileRefs: FileRef[] | null;
+  tools: LooseRequest[] | null;
+  effectiveReq: LooseRequest;
+  promptTokens: number;
+  signal: AbortSignal;
+};
+
+export async function* streamGoogleToolCompletionEvents(provider: CompletionProvider, params: GoogleToolCompletionParams): AsyncIterable<GoogleToolCompletionEvent> {
+  const { prompt, rm, fileRefs, tools, effectiveReq, promptTokens, signal } = params;
+  const streamErrorText = (e: unknown) => `⚠️ upstream error: ${upstreamErrorMessage(e)}`;
+  const streamInterruptedWarningText = (e: unknown) => streamErrorText(e).replace("upstream error", "stream interrupted after partial output");
+  const extraTokenCounter = createTokenCounter();
+  let completionCounts = emptyTokenCounts();
+  let buffered = "";
+  let emittedText = false;
+  let issue: { error: unknown } | null = null;
+
+  for await (const event of streamBufferedToolTextCompletionEvents(provider, { prompt, rm, fileRefs }, { signal })) {
+    if (event.type === "text_delta") {
+      emittedText = true;
+      yield { type: "candidate", parts: [{ text: event.text }], finishReason: null };
+    } else if (event.type === "buffered_text") {
+      buffered += event.text;
+    } else if (event.type === "warning" || event.type === "stream_error") {
+      issue = event;
+    } else if (event.type === "done") {
+      completionCounts = event.completionCounts;
+    }
+  }
+
+  const [clean, functionCalls]: [string, GoogleFunctionCall[]] = parseGoogleFunctionCalls(buffered, tools);
+  if (clean) {
+    extraTokenCounter.append(clean);
+    yield { type: "candidate", parts: [{ text: clean }], finishReason: null };
+  }
+
+  const violation = validateGoogleFunctionCalls(effectiveReq, functionCalls);
+  if (violation) {
+    yield { type: "tool_policy_violation", violation };
+    return;
+  }
+  if (functionCalls && functionCalls.length) {
+    if (issue) yield { type: "warning", error: issue.error };
+    yield {
+      type: "candidate",
+      parts: functionCalls.map((fc) => ({ functionCall: { name: fc.name, args: fc.args || {} } })),
+      finishReason: null,
+    };
+  } else if (!emittedText && !clean) {
+    const note = issue ? streamErrorText(issue.error) : EMPTY_UPSTREAM_MSG;
+    extraTokenCounter.append(note);
+    yield { type: "candidate", parts: [{ text: note }], finishReason: null };
+  } else if (issue) {
+    const warning = "\n\n" + streamInterruptedWarningText(issue.error);
+    yield { type: "warning", error: issue.error, message: warning.trim() };
+    extraTokenCounter.append(warning);
+    yield { type: "candidate", parts: [{ text: warning }], finishReason: null };
+  }
+  const candidateTokens = combinedTokenCount(completionCounts, extraTokenCounter);
+  const promptTokenCount = Math.max(0, Number(promptTokens) || 0);
+  yield { type: "done", usageMetadata: {
+    promptTokenCount,
+    candidatesTokenCount: candidateTokens,
+    totalTokenCount: promptTokenCount + candidateTokens,
+  } };
+}
+
+function emptyTokenCounts(): TokenCharCounts & { hasText: boolean } {
+  return { asciiChars: 0, nonASCIIChars: 0, hasText: false };
+}
+
+function combinedTokenCount(
+  completionCounts: TokenCharCounts & { hasText: boolean },
+  extraTokenCounter: ReturnType<typeof createTokenCounter>,
+): number {
+  const counts = addTokenCharCounts(emptyTokenCounts(), completionCounts);
+  addTokenCharCounts(counts, extraTokenCounter.counts());
+  return tokenCountFromCounts(counts);
+}

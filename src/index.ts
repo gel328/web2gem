@@ -1,0 +1,112 @@
+import { getConfig } from "./config";
+import { authorized, corsHeaders, jsonResponse, jsonTextResponse, openAIErrorResponse, withCORS } from "./http";
+import { handleChat, handleResponses } from "./http/openai";
+import { handleGoogleGenerate } from "./http/google/handlers";
+import { GOOGLE_MODEL_JSON_BY_ID, GOOGLE_MODEL_LIST_JSON, HEALTH_JSON, NOT_FOUND_JSON, OPENAI_MODEL_JSON_BY_ID, OPENAI_MODEL_LIST_JSON } from "./http/core/model-routes";
+import { googleJsonError, readRouteJsonPost } from "./http/core/route-json";
+import { createGeminiCompletionProvider } from "./gemini/completion-provider";
+import { errorLogSummary, log } from "./shared/runtime";
+import type { RuntimeConfig } from "./config";
+import type { RouteJsonPostResult } from "./http/core/route-json";
+
+const GOOGLE_GENERATE_PATH_RE = /^\/v(?:1beta|1)\/models\/[^/?#]+:generateContent$/;
+const GOOGLE_STREAM_GENERATE_PATH_RE = /^\/v(?:1beta|1)\/models\/[^/?#]+:streamGenerateContent$/;
+
+export default {
+  async fetch(request: Request, env: Record<string, unknown>, _ctx: ExecutionContext) {
+    const method = request.method;
+
+    if (method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders(request),
+      });
+    }
+
+    const cfg = { ...getConfig(env), execution_ctx: _ctx };
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const respond = (response: Response) => withCORS(response, request);
+
+    // 鉴权:配置了 API_KEYS 时,除健康检查 "/" 外的所有接口都需要有效 key
+    // (含 /v1/* 与 /v1beta/*,防止 Google 原生端点被绕过白嫖)。
+    if (path !== "/" && !authorized(request, url, cfg)) {
+      return respond(openAIErrorResponse("invalid api key", 401));
+    }
+
+    try {
+      if (method === "GET") {
+        if (path === "/v1/models") {
+          return respond(jsonTextResponse(OPENAI_MODEL_LIST_JSON));
+        }
+        if (path.startsWith("/v1/models/")) {
+          const id = decodeURIComponent(path.slice("/v1/models/".length));
+          const modelJson = OPENAI_MODEL_JSON_BY_ID.get(id);
+          if (!modelJson) return respond(openAIErrorResponse(`model ${id} is not available`, 404, "model_not_found"));
+          return respond(jsonTextResponse(modelJson));
+        }
+        if (path === "/v1beta/models") {
+          return respond(jsonTextResponse(GOOGLE_MODEL_LIST_JSON));
+        }
+        if (path.startsWith("/v1beta/models/")) {
+          const id = decodeURIComponent(path.slice("/v1beta/models/".length));
+          const modelJson = GOOGLE_MODEL_JSON_BY_ID.get(id);
+          if (!modelJson) return respond(jsonResponse({ error: { message: `model ${id} is not available`, code: "model_not_found" } }, 404));
+          return respond(jsonTextResponse(modelJson));
+        }
+        if (path === "/") {
+          return respond(jsonTextResponse(HEALTH_JSON));
+        }
+        return respond(jsonTextResponse(NOT_FOUND_JSON, 404));
+      }
+
+      if (method === "POST") {
+        if (path === "/v1/chat/completions") {
+          return respond(await handleOpenAIJsonPost(request, cfg, path, (body) => handleChat(body, cfg, createGeminiCompletionProvider(cfg))));
+        }
+        if (path === "/v1/responses") {
+          return respond(await handleOpenAIJsonPost(request, cfg, path, (body) => handleResponses(body, cfg, createGeminiCompletionProvider(cfg))));
+        }
+        if (GOOGLE_GENERATE_PATH_RE.test(path)) {
+          return respond(await handleGoogleJsonPost(request, cfg, path, (body) => handleGoogleGenerate(body, cfg, createGeminiCompletionProvider(cfg), path, false)));
+        }
+        if (GOOGLE_STREAM_GENERATE_PATH_RE.test(path)) {
+          return respond(await handleGoogleJsonPost(request, cfg, path, (body) => handleGoogleGenerate(body, cfg, createGeminiCompletionProvider(cfg), path, true)));
+        }
+        return respond(jsonTextResponse(NOT_FOUND_JSON, 404));
+      }
+
+      return respond(jsonTextResponse(NOT_FOUND_JSON, 404));
+    } catch (e) {
+      const err = e as { stack?: unknown; message?: unknown } | null | undefined;
+      log(cfg, `error: ${errorLogSummary(e)}`);
+      return respond(jsonResponse({ error: { message: String((err && err.message) || e) } }, 500));
+    }
+  },
+};
+
+
+// Stable public helper exports for the bundled worker module.
+export * from "./public-exports";
+
+async function handleOpenAIJsonPost(
+  request: Request,
+  cfg: RuntimeConfig,
+  path: string,
+  handler: (body: NonNullable<RouteJsonPostResult["value"]>) => Promise<Response>,
+): Promise<Response> {
+  const parsed = await readRouteJsonPost(request, cfg, path);
+  if (parsed.error !== undefined) return openAIErrorResponse(parsed.error, parsed.status || 400, parsed.code);
+  return handler(parsed.value);
+}
+
+async function handleGoogleJsonPost(
+  request: Request,
+  cfg: RuntimeConfig,
+  path: string,
+  handler: (body: NonNullable<RouteJsonPostResult["value"]>) => Promise<Response>,
+): Promise<Response> {
+  const parsed = await readRouteJsonPost(request, cfg, path);
+  if (parsed.error !== undefined) return jsonResponse(googleJsonError(parsed.error, parsed.code), parsed.status || 400);
+  return handler(parsed.value);
+}

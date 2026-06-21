@@ -1,0 +1,109 @@
+import type { ErrorWithMetadata } from "../../shared/types";
+import { promptByteLength } from "../../shared/tokens";
+
+export const LARGE_PROMPT_EMPTY_RESPONSE_MIN_BYTES = 95000;
+export const LARGE_PROMPT_EMPTY_RESPONSE_CODE = "large_prompt_empty_response";
+export const DATA_ANALYSIS_EMPTY_RESPONSE_CODE = "data_analysis_empty_response";
+export const INVALID_GEMINI_COOKIE_CODE = "invalid_gemini_cookie";
+
+const AUTH_FAILURE_STATUSES = new Set([401, 403]);
+
+type LargePromptConfig = { current_input_file_min_bytes?: unknown } | null | undefined;
+type CookieConfig = { cookie?: unknown } | null | undefined;
+
+const COOKIE_DIAGNOSTIC_MESSAGES: Record<string, string> = {
+  missing_cookie: "no Gemini cookie is configured",
+  missing_secure_1psid: "configured cookie is missing __Secure-1PSID",
+  recent_rotation: "cookie rotation was skipped because a rotation ran recently",
+  rotation_rejected: "Google rejected the RotateCookies request",
+  rotation_failed: "RotateCookies returned a non-success status",
+  rotation_no_update: "RotateCookies completed but did not return an updated cookie",
+  rotation_error: "RotateCookies could not be completed",
+  rotation_updated: "cookie rotation succeeded but Gemini still rejected the request",
+  missing_page_at_token: "Gemini page did not return the required auth token",
+};
+
+export function largePromptEmptyResponseThreshold(cfg: LargePromptConfig): number {
+  return Math.max(0, Number(cfg?.current_input_file_min_bytes) || LARGE_PROMPT_EMPTY_RESPONSE_MIN_BYTES);
+}
+
+export function largePromptEmptyResponseError(
+  prompt: unknown,
+  status: unknown,
+  rawLength: number | null,
+  thresholdBytes: unknown = LARGE_PROMPT_EMPTY_RESPONSE_MIN_BYTES,
+): ErrorWithMetadata | null {
+  const bytes = promptByteLength(prompt);
+  const threshold = Math.max(0, Number(thresholdBytes) || LARGE_PROMPT_EMPTY_RESPONSE_MIN_BYTES);
+  if (bytes <= threshold) return null;
+  const err: ErrorWithMetadata = new Error(
+    `Context is too long and triggered Gemini Web risk controls, so Gemini returned an empty response ` +
+    `(${bytes} UTF-8 bytes > ${threshold}). This is unrelated to GEMINI_BL; ` +
+    "set GEMINI_COOKIE so this worker can route long context through txt attachments, or reduce the latest inline request size."
+  );
+  err.code = LARGE_PROMPT_EMPTY_RESPONSE_CODE;
+  err.promptBytes = bytes;
+  err.thresholdBytes = threshold;
+  err.upstreamStatus = Number(status);
+  err.rawLength = rawLength;
+  return err;
+}
+
+export function isLargePromptEmptyResponseError(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as Partial<ErrorWithMetadata>).code === LARGE_PROMPT_EMPTY_RESPONSE_CODE;
+}
+
+export function dataAnalysisEmptyResponseError(rawSnippet: unknown, fileRefs: unknown): ErrorWithMetadata | null {
+  if (!fileRefs || !String(rawSnippet || "").includes("data_analysis_tool")) return null;
+  const err: ErrorWithMetadata = new Error(
+    "Gemini accepted the uploaded context file but routed it into the internal data_analysis_tool and returned no final text. " +
+    "This Worker does not implement Gemini Web's follow-up data-analysis tool loop. Try the markdown context-file defaults, lower CURRENT_INPUT_FILE_MIN_BYTES, or disable CURRENT_INPUT_FILE_ENABLED for this request."
+  );
+  err.code = DATA_ANALYSIS_EMPTY_RESPONSE_CODE;
+  return err;
+}
+
+export function isDataAnalysisEmptyResponseError(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as Partial<ErrorWithMetadata>).code === DATA_ANALYSIS_EMPTY_RESPONSE_CODE;
+}
+
+export function invalidGeminiCookieError(
+  cfg: CookieConfig,
+  status: unknown,
+  rawLength: number | null = null,
+  diagnosticReason: unknown = "",
+): ErrorWithMetadata | null {
+  if (!cfg || !cfg.cookie || !AUTH_FAILURE_STATUSES.has(Number(status))) return null;
+  const reason = cookieDiagnosticMessage(diagnosticReason);
+  const err: ErrorWithMetadata = new Error(
+    `Gemini rejected the configured GEMINI_COOKIE (upstream HTTP ${status}). ` +
+    (reason ? `Diagnostic: ${reason}. ` : "") +
+    "Update GEMINI_COOKIE with a valid, unexpired Gemini web session cookie, or remove it for anonymous-capable models."
+  );
+  err.code = INVALID_GEMINI_COOKIE_CODE;
+  err.status = 401;
+  err.upstreamStatus = Number(status);
+  err.rawLength = rawLength;
+  if (reason) err.reason = reason;
+  return err;
+}
+
+export function unverifiedGeminiCookieError(reason: string = "missing Gemini page auth token") {
+  const messageReason = cookieDiagnosticMessage(reason) || reason;
+  const err: ErrorWithMetadata = new Error(
+    `Could not verify the configured GEMINI_COOKIE (${messageReason}). ` +
+    "Update GEMINI_COOKIE with a valid, unexpired Gemini web session cookie, or remove it for anonymous-capable models."
+  );
+  err.code = INVALID_GEMINI_COOKIE_CODE;
+  err.status = 401;
+  return err;
+}
+
+export function isInvalidGeminiCookieError(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as Partial<ErrorWithMetadata>).code === INVALID_GEMINI_COOKIE_CODE;
+}
+
+function cookieDiagnosticMessage(reason: unknown): string {
+  const key = String(reason || "").trim();
+  return COOKIE_DIAGNOSTIC_MESSAGES[key] || "";
+}

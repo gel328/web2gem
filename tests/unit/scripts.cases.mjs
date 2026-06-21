@@ -1,0 +1,97 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import assert from "./assertions.js";
+
+export const suiteName = "quality scripts";
+export const cases = [
+  ["accepts coverage summaries that satisfy line and branch gates", async () => {
+    await withCoverageSummary(fullCoverageSummary(), async (summaryPath) => {
+      const result = await runNodeScript("scripts/check-coverage.mjs", summaryPath);
+      assert.equal(result.code, 0);
+      assert.match(result.stdout, /Coverage gates passed/);
+    });
+  }],
+  ["rejects coverage summaries below branch gates", async () => {
+    const summary = fullCoverageSummary();
+    summary["src/toolcall/structured.ts"].branches.covered = 54;
+    await withCoverageSummary(summary, async (summaryPath) => {
+      const result = await runNodeScript("scripts/check-coverage.mjs", summaryPath);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /Coverage gate failed/);
+      assert.match(result.stderr, /src\/toolcall\/structured\.ts/);
+    });
+  }],
+  ["rejects missing coverage data for required targets", async () => {
+    const summary = fullCoverageSummary();
+    delete summary["src/http/openai/responses-stream.ts"];
+    await withCoverageSummary(summary, async (summaryPath) => {
+      const result = await runNodeScript("scripts/check-coverage.mjs", summaryPath);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /missing lines coverage data/);
+      assert.match(result.stderr, /responses-stream\.ts/);
+    });
+  }],
+  ["keeps Docker Compose port mapping aligned with the container listener", async () => {
+    const compose = await readFile("compose.yaml", "utf8");
+    assert.match(compose, /\$\{PORT:-52389\}:\$\{PORT:-52389\}/);
+    assert.doesNotMatch(compose, /\$\{PORT:-52389\}:52389/);
+  }],
+];
+
+function coverageEntry(linePct = 100, branchPct = 100) {
+  return {
+    lines: { total: 100, covered: linePct, skipped: 0, pct: linePct },
+    statements: { total: 100, covered: linePct, skipped: 0, pct: linePct },
+    functions: { total: 100, covered: 100, skipped: 0, pct: 100 },
+    branches: { total: 100, covered: branchPct, skipped: 0, pct: branchPct },
+  };
+}
+
+function fullCoverageSummary() {
+  return {
+    total: coverageEntry(),
+    "src/completion/index.ts": coverageEntry(),
+    "src/config/index.ts": coverageEntry(),
+    "src/gemini/index.ts": coverageEntry(),
+    "src/gemini/client/index.ts": coverageEntry(),
+    "src/gemini/transport/http.ts": coverageEntry(),
+    "src/gemini/uploads/index.ts": coverageEntry(),
+    "src/http/core/json.ts": coverageEntry(),
+    "src/http/google/handlers.ts": coverageEntry(),
+    "src/http/openai/chat.ts": coverageEntry(),
+    "src/http/openai/responses-stream.ts": coverageEntry(),
+    "src/http/stream/coalescer.ts": coverageEntry(),
+    "src/models/index.ts": coverageEntry(),
+    "src/promptcompat/history.ts": coverageEntry(),
+    "src/promptcompat/messages.ts": coverageEntry(),
+    "src/promptcompat/responses-input.ts": coverageEntry(),
+    "src/shared/tokens.ts": coverageEntry(),
+    "src/toolcall/structured.ts": coverageEntry(),
+    "src/toolstream/index.ts": coverageEntry(),
+  };
+}
+
+async function withCoverageSummary(summary, run) {
+  const dir = await mkdtemp(join(tmpdir(), "gemini-coverage-"));
+  try {
+    const summaryPath = join(dir, "coverage-summary.json");
+    await writeFile(summaryPath, JSON.stringify(summary), "utf8");
+    await run(summaryPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function runNodeScript(script, arg) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [script, arg], { cwd: process.cwd() }, (error, stdout, stderr) => {
+      resolve({
+        code: error && typeof error.code === "number" ? error.code : 0,
+        stdout,
+        stderr,
+      });
+    });
+  });
+}

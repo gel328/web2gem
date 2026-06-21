@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist-coverage/
+coverage/
+.wrangler/
+*.log
+AGENTS.md
+.env
+.env.local
+
+# Local agent and workspace state
+.claude/
+.codex/
+.trellis/.backup-*
+.trellis/.cache/
+.trellis/.runtime/
+.trellis/.template-hashes.json
+.trellis/worktrees/
+.trellis/tasks/
+.trellis/workspace/

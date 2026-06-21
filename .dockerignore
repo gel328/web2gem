@@ -1,0 +1,19 @@
+.git
+.github
+.claude
+.agents
+.codex
+.trellis
+.wrangler
+node_modules
+dist
+dist-coverage
+coverage
+*.log
+AGENTS.md
+
+# Nested / unrelated repositories in this workspace
+ds2api
+Gemini-FastAPI
+Gemini-API
+HelloGML

@@ -1,0 +1,30 @@
+{
+  "name": "web2gem",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.6.0",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "check:arch": "node scripts/check-architecture.mjs",
+    "unit:quick": "node scripts/ensure-test-bundle-fresh.mjs && vitest run",
+    "unit": "pnpm build && vitest run",
+    "coverage": "node scripts/coverage.mjs",
+    "coverage:ci": "node scripts/coverage.mjs --ci",
+    "smoke": "pnpm build && node scripts/smoke.mjs",
+    "docker:smoke": "node scripts/docker-smoke.mjs",
+    "bench": "pnpm build && node scripts/bench.mjs",
+    "docker:start": "node scripts/docker-server.mjs",
+    "dev": "pnpm build && wrangler dev",
+    "deploy": "pnpm build && wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260619.1",
+    "@vitest/coverage-v8": "^4.1.9",
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.102.0"
+  }
+}
