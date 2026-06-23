@@ -88,7 +88,7 @@ export const cases = [
       mod.log({ log_requests: true }, "safe");
     });
   }],
-  ["handles runtime abort timeout and linked signal edges", async () => {
+  ["handles runtime abort and timeout edges", async () => {
     await mod.sleep(0);
     assert.equal(mod.timeoutSignal("not-a-number"), undefined);
     assert.equal(mod.timeoutSignal(0), undefined);
@@ -113,32 +113,8 @@ export const cases = [
     assert.equal(mod.isAbortError({ code: "request_aborted" }), true);
     assert.equal(mod.isAbortError({ name: "AbortError" }), true);
     assert.equal(mod.isAbortError(new Error("plain")), false);
-
-    assert.equal(mod.linkedSignal(null, undefined).signal, undefined);
-    const single = new AbortController();
-    assert.equal(mod.linkedSignal(single.signal).signal, single.signal);
-    const first = new AbortController();
-    const second = new AbortController();
-    const linked = mod.linkedSignal(first.signal, second.signal);
-    second.abort("from second");
-    assert.equal(linked.signal.aborted, true);
-    assert.equal(linked.signal.reason, "from second");
-
-    const cleanedA = new AbortController();
-    const cleanedB = new AbortController();
-    const cleaned = mod.linkedSignal(cleanedA.signal, cleanedB.signal);
-    cleaned.cleanup();
-    cleanedA.abort("ignored after cleanup");
-    assert.equal(cleaned.signal.aborted, false);
-
-    const preAborted = new AbortController();
-    preAborted.abort("pre");
-    const preLinked = mod.linkedSignal(preAborted.signal, new AbortController().signal);
-    assert.equal(preLinked.signal.aborted, true);
-    assert.equal(preLinked.signal.reason, "pre");
   }],
-  ["uses native AbortSignal.any for fetch timeout linking when available", async () => {
-    if (typeof AbortSignal.any !== "function") return;
+  ["uses native AbortSignal.any for fetch timeout linking", async () => {
     const originalAny = AbortSignal.any;
     let calls = 0;
     let seenSignals = null;
@@ -204,7 +180,7 @@ export const cases = [
     assert.equal(plainAbort.code, "request_aborted");
     assert.match(plainAbort.message, /request aborted/);
   }],
-  ["generates runtime ids through native and fallback crypto paths", async () => {
+  ["generates runtime ids through native crypto paths", async () => {
     await withPatchedGlobal("crypto", {
       getRandomValues(arr) {
         for (let i = 0; i < arr.length; i++) arr[i] = 0xab + i;
@@ -217,22 +193,6 @@ export const cases = [
       assert.deepEqual(Array.from(mod.randomBytes(3)), [0xab, 0xac, 0xad]);
       assert.equal(mod.randHex(5), "abaca");
       assert.equal(mod.uuid(), "native-uuid");
-    });
-
-    await withPatchedGlobal("crypto", {
-      getRandomValues(arr) {
-        for (let i = 0; i < arr.length; i++) arr[i] = i;
-        return arr;
-      },
-    }, async () => {
-      assert.equal(mod.uuid(), "00010203-0405-4607-8809-0a0b0c0d0e0f");
-    });
-
-    await withPatchedGlobal("crypto", null, async () => {
-      const bytes = mod.randomBytes(4);
-      assert.equal(bytes.length, 4);
-      assert.equal(Array.from(bytes).every((value) => value >= 0 && value <= 255), true);
-      assert.match(mod.randHex(7), /^[0-9a-f]{7}$/);
     });
   }],
   ["builds and caches SAPISIDHASH authorization headers", async () => {
@@ -255,16 +215,13 @@ export const cases = [
         },
       }, async () => {
         const first = await mod.makeSapisidHash("sapi-cache-test");
-        const second = await mod.makeSapisidHash("sapi-cache-test");
-        assert.equal(first, "SAPISIDHASH 1700000000_ab000000000000000000000000000000000000cd");
-        assert.equal(second, first);
-        assert.equal(digestCalls, 1);
-        assert.equal(digestInput, "1700000000 sapi-cache-test https://gemini.google.com");
-        assert.equal(mod._sapisidHashCache.value, first);
-      });
-      await withPatchedGlobal("crypto", {}, async () => {
-        await assert.rejects(() => mod.makeSapisidHash("missing-subtle"), /crypto\.subtle is required/);
-      });
+      const second = await mod.makeSapisidHash("sapi-cache-test");
+      assert.equal(first, "SAPISIDHASH 1700000000_ab000000000000000000000000000000000000cd");
+      assert.equal(second, first);
+      assert.equal(digestCalls, 1);
+      assert.equal(digestInput, "1700000000 sapi-cache-test https://gemini.google.com");
+      assert.equal(mod._sapisidHashCache.value, first);
+    });
     } finally {
       Date.now = originalNow;
     }
@@ -610,69 +567,67 @@ export const cases = [
   ["aborts SSE producers when stream writes fail", async () => {
     const NativeTransformStream = globalThis.TransformStream;
 
-    await withPatchedGlobal("IdentityTransformStream", undefined, async () => {
-      await withPatchedGlobal("TransformStream", class {
-        constructor() {
-          this.readable = new NativeTransformStream().readable;
-          this.writable = {
-            getWriter() {
-              return {
-                closed: new Promise(() => {}),
-                write() {
-                  return Promise.reject(new Error("write rejected"));
-                },
-                close() {
-                  return Promise.resolve();
-                },
-                releaseLock() {},
-              };
-            },
-          };
-        }
-      }, async () => {
-        let sawAbort = false;
-        const done = new Promise((resolve) => {
-          mod.sseResponse(async (write, signal) => {
-            write("data: rejected\n\n");
-            await new Promise((innerResolve) => signal.addEventListener("abort", innerResolve, { once: true }));
-            sawAbort = signal.aborted;
-            resolve();
-          });
+    await withPatchedGlobal("TransformStream", class {
+      constructor() {
+        this.readable = new NativeTransformStream().readable;
+        this.writable = {
+          getWriter() {
+            return {
+              closed: new Promise(() => {}),
+              write() {
+                return Promise.reject(new Error("write rejected"));
+              },
+              close() {
+                return Promise.resolve();
+              },
+              releaseLock() {},
+            };
+          },
+        };
+      }
+    }, async () => {
+      let sawAbort = false;
+      const done = new Promise((resolve) => {
+        mod.sseResponse(async (write, signal) => {
+          write("data: rejected\n\n");
+          await new Promise((innerResolve) => signal.addEventListener("abort", innerResolve, { once: true }));
+          sawAbort = signal.aborted;
+          resolve();
         });
-        await done;
-        assert.equal(sawAbort, true);
       });
+      await done;
+      assert.equal(sawAbort, true);
+    });
 
-      await withPatchedGlobal("TransformStream", class {
-        constructor() {
-          this.readable = new NativeTransformStream().readable;
-          this.writable = {
-            getWriter() {
-              return {
-                closed: new Promise(() => {}),
-                write() {
-                  throw new Error("write threw");
-                },
-                close() {
-                  return Promise.resolve();
-                },
-                releaseLock() {},
-              };
-            },
-          };
-        }
-      }, async () => {
-        let sawAbort = false;
-        const done = new Promise((resolve) => {
-          mod.sseResponse(async (write, signal) => {
-            write("data: thrown\n\n");
-            sawAbort = signal.aborted;
-            resolve();
-          });
+    await withPatchedGlobal("TransformStream", class {
+      constructor() {
+        this.readable = new NativeTransformStream().readable;
+        this.writable = {
+          getWriter() {
+            return {
+              closed: new Promise(() => {}),
+              write() {
+                throw new Error("write threw");
+              },
+              close() {
+                return Promise.resolve();
+              },
+              releaseLock() {},
+            };
+          },
+        };
+      }
+    }, async () => {
+      let sawAbort = false;
+      const done = new Promise((resolve) => {
+        mod.sseResponse(async (write, signal) => {
+          write("data: thrown\n\n");
+          sawAbort = signal.aborted;
+          resolve();
         });
-        await done;
-        assert.equal(sawAbort, true);
       });
+      await done;
+      assert.equal(sawAbort, true);
     });
   }],
   ["reads JSON requests and cancels oversized bodies", async () => {
@@ -824,7 +779,6 @@ export const cases = [
     assert.doesNotMatch(joinedWriteText(state), /Content-Length: 999/);
   }],
   ["decodes compressed socket HTTP responses when explicitly enabled", async () => {
-    if (typeof CompressionStream !== "function" || typeof DecompressionStream !== "function") return;
     const body = await gzipText("hello");
     const state = {};
     const resp = await mod.socketHttp(fakeSocketConnect([
@@ -835,18 +789,6 @@ export const cases = [
     assert.equal(resp.headers.get("content-encoding"), null);
     assert.equal(resp.headers.get("content-length"), null);
     assert.match(joinedWriteText(state), /Accept-Encoding: gzip\r\n/);
-  }],
-  ["does not construct unsupported socket gzip decompression streams", async () => {
-    if (typeof CompressionStream !== "function") return;
-    const body = await gzipText("hello");
-    await withPatchedGlobal("DecompressionStream", undefined, async () => {
-      const resp = await mod.socketHttp(fakeSocketConnect([
-        `HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: ${body.length}\r\n\r\n`,
-        body,
-      ]), "https://example.test/unsupported-compressed");
-      const raw = new Uint8Array(await new Response(resp.body).arrayBuffer());
-      assert.deepEqual(Array.from(raw), Array.from(body));
-    });
   }],
   ["reuses socket HTTP keep-alive connections after complete bounded responses", async () => {
     const state = {};
@@ -1080,6 +1022,24 @@ export const cases = [
 
       fetched = false;
       mod._setConnectForTest(() => {
+        const err = new Error("socket disabled secret");
+        err.code = "socket_disabled";
+        throw err;
+      });
+      await assert.rejects(
+        () => mod.httpFetch("https://example.test/no-policy-fallback", {
+          method: "POST",
+          body: "x",
+          socket: true,
+          socketFallback: "never",
+          timeoutMs: 100,
+          cfg: { log_requests: true },
+        }),
+        /socket disabled secret/,
+      );
+      assert.equal(fetched, false);
+
+      mod._setConnectForTest(() => {
         const err = new Error("upstream response started secret");
         err.code = "socket_response_started";
         err.upstreamStatus = 502;
@@ -1097,10 +1057,11 @@ export const cases = [
       assert.equal(fetched, false);
       mod._setConnectForTest(null);
     }));
-    assert.equal(logs.length, 2);
+    assert.equal(logs.length, 3);
     assert.match(logs[0], /falling back to fetch: type=Error code=socket_boom/);
-    assert.match(logs[1], /not falling back after upstream response for POST: type=Error code=socket_response_started upstreamStatus=502/);
-    assert.doesNotMatch(logs.join("\n"), /socket boom secret|upstream response started secret/);
+    assert.match(logs[1], /fallback disabled for POST: type=Error code=socket_disabled/);
+    assert.match(logs[2], /not falling back after upstream response for POST: type=Error code=socket_response_started upstreamStatus=502/);
+    assert.doesNotMatch(logs.join("\n"), /socket boom secret|socket disabled secret|upstream response started secret/);
   }],
   ["renders upstream empty response warning without leaking build hints", async () => {
     assert.match(mod.EMPTY_UPSTREAM_MSG, /empty response/);

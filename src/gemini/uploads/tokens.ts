@@ -92,6 +92,11 @@ export async function setCachedGeminiPushId(cfg: RuntimeConfig, value: string): 
   await pushIdCache.setCached(cfg, value);
 }
 
+export async function refreshGeminiPushId(cfg: RuntimeConfig): Promise<string> {
+  await pushIdCache.deleteCached(cfg);
+  return getFreshGeminiPushId(cfg);
+}
+
 async function getFreshGeminiPushId(cfg: RuntimeConfig): Promise<string> {
   return pushIdCache.getFresh(cfg, fetchFreshGeminiPushId);
 }

@@ -5,7 +5,7 @@ import { TEXT_ENCODER } from "../../shared/runtime";
 import { GEMINI_WEB_USER_AGENT } from "../constants";
 import { httpFetch } from "../transport";
 import { contentPushUploadError, validateContentPushFileRef } from "./errors";
-import { contentPushUploadTokens, getGeminiPushId } from "./tokens";
+import { contentPushUploadTokens, getGeminiPushId, refreshGeminiPushId } from "./tokens";
 
 export type UploadBytesInput = {
   bytes: Uint8Array;
@@ -16,7 +16,11 @@ export type UploadBytesInput = {
 const MULTIPART_UPLOAD_ENDPOINT = "https://content-push.googleapis.com/upload";
 
 export async function uploadMultipartFile(cfg: RuntimeConfig, input: UploadBytesInput): Promise<string> {
-  const tokens = contentPushUploadTokens(await getGeminiPushId(cfg), "multipart");
+  return uploadMultipartFileWithPushId(cfg, input, await getGeminiPushId(cfg), false);
+}
+
+async function uploadMultipartFileWithPushId(cfg: RuntimeConfig, input: UploadBytesInput, pushId: string, retriedAfterRefresh: boolean): Promise<string> {
+  const tokens = contentPushUploadTokens(pushId, "multipart");
   const multipart = buildMultipartFileBody(input);
   const headers: Record<string, string> = {
     "Origin": "https://gemini.google.com",
@@ -35,12 +39,23 @@ export async function uploadMultipartFile(cfg: RuntimeConfig, input: UploadBytes
     cfg,
   });
   if (!response.ok) {
+    if (!retriedAfterRefresh && shouldRefreshPushIdAfterStatus(response.status)) {
+      const refreshedPushId = await refreshGeminiPushId(cfg);
+      if (refreshedPushId && refreshedPushId !== tokens.pushId) {
+        return uploadMultipartFileWithPushId(cfg, input, refreshedPushId, true);
+      }
+    }
     throw contentPushUploadError("content_push_http_status", `multipart upload failed with HTTP ${response.status}`, {
       status: response.status,
       protocol: "multipart",
     });
   }
   return validateContentPushFileRef(await response.text(), "multipart");
+}
+
+function shouldRefreshPushIdAfterStatus(status: unknown): boolean {
+  const code = Number(status);
+  return code === 401 || code === 403 || code === 415;
 }
 
 export function buildMultipartFileBody(input: UploadBytesInput): { body: Uint8Array; contentType: string; boundary: string } {

@@ -20,7 +20,7 @@ if (!coverageBuild) {
 const common = {
   bundle: true,
   format: "esm",
-  target: "es2022",
+  target: "es2025",
   platform: "browser",
   sourcemap: coverageBuild ? "linked" : false,
   sourcesContent: coverageBuild,

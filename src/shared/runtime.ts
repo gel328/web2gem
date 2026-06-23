@@ -34,7 +34,7 @@ export function logInfo(cfg: LogConfig, msg: unknown): void {
 }
 
 export function nowMs(): number {
-  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  return performance.now();
 }
 
 export function elapsedMs(startMs: number): number {
@@ -56,8 +56,6 @@ export function nowSec(): number {
 }
 
 export function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
-  const wait = schedulerWait();
-  if (wait) return wait(ms, signal || undefined);
   if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
@@ -73,32 +71,10 @@ export function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
   });
 }
 
-type SchedulerWait = (ms: number, options?: { signal?: AbortSignal }) => Promise<void>;
-
-function schedulerWait(): ((ms: number, signal?: AbortSignal) => Promise<void>) | null {
-  const schedulerLike = (globalThis as typeof globalThis & { scheduler?: { wait?: SchedulerWait } }).scheduler;
-  const wait = schedulerLike && schedulerLike.wait;
-  if (typeof wait !== "function") return null;
-  return async (ms: number, signal?: AbortSignal) => {
-    try {
-      await wait.call(schedulerLike, ms, signal ? { signal } : undefined);
-    } catch (e) {
-      if (signal && signal.aborted) throw abortError(signal);
-      throw e;
-    }
-  };
-}
-
 export function timeoutSignal(ms: unknown): AbortSignal | undefined {
   const n = Number(ms);
   if (!Number.isFinite(n) || n <= 0) return undefined;
-  if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
-    return AbortSignal.timeout(n);
-  }
-  if (typeof AbortController === "undefined") return undefined;
-  const ac = new AbortController();
-  setTimeout(() => ac.abort(), n);
-  return ac.signal;
+  return AbortSignal.timeout(n);
 }
 
 export function abortError(signal?: AbortSignal | null): ErrorWithMetadata {
@@ -153,38 +129,6 @@ export function throwIfAborted(signal?: AbortSignal | null): void {
   if (signal && signal.aborted) throw abortError(signal);
 }
 
-export function linkedSignal(...signals: Array<AbortSignal | null | undefined>): { signal: AbortSignal | undefined; cleanup: () => void } {
-  const live = signals.filter((signal): signal is AbortSignal => !!signal);
-  if (!live.length) return { signal: undefined, cleanup() {} };
-  if (live.length === 1) return { signal: live[0], cleanup() {} };
-  const ac = new AbortController();
-  const listeners: Array<[AbortSignal, () => void]> = [];
-  const cleanup = () => {
-    while (listeners.length) {
-      const entry = listeners.pop();
-      if (!entry) continue;
-      const [signal, listener] = entry;
-      try { signal.removeEventListener("abort", listener); } catch (_) {}
-    }
-  };
-  const abort = (signal: AbortSignal) => {
-    cleanup();
-    if (!ac.signal.aborted) {
-      try { ac.abort(signal && signal.reason); } catch (_) { ac.abort(); }
-    }
-  };
-  for (const signal of live) {
-    if (signal.aborted) {
-      abort(signal);
-      break;
-    }
-    const listener = () => abort(signal);
-    listeners.push([signal, listener]);
-    signal.addEventListener("abort", listener, { once: true });
-  }
-  return { signal: ac.signal, cleanup };
-}
-
 export function canFallbackAfterSocketError(_method: string, error: unknown): boolean {
   // socketHttp only throws here before it has returned a Response object to the
   // caller. In production Cloudflare sockets can close before any response
@@ -195,22 +139,12 @@ export function canFallbackAfterSocketError(_method: string, error: unknown): bo
 
 export function randomBytes(n: number): Uint8Array {
   const arr = new Uint8Array(n);
-  if (globalThis.crypto && globalThis.crypto.getRandomValues) {
-    globalThis.crypto.getRandomValues(arr);
-  } else {
-    for (let i = 0; i < n; i++) arr[i] = Math.floor(Math.random() * 256);
-  }
+  crypto.getRandomValues(arr);
   return arr;
 }
 
-const HEX_BYTE_TABLE = Array.from({ length: 256 }, (_value, index) => index.toString(16).padStart(2, "0"));
-
 function bytesToHex(bytes: Uint8Array): string {
-  const toHex = (bytes as Uint8Array & { toHex?: () => string }).toHex;
-  if (typeof toHex === "function") return toHex.call(bytes);
-  const parts = new Array<string>(bytes.length);
-  for (let i = 0; i < bytes.length; i++) parts[i] = HEX_BYTE_TABLE[bytes[i] || 0] || "00";
-  return parts.join("");
+  return (bytes as Uint8Array & { toHex(): string }).toHex();
 }
 
 /** 生成 `n` 个十六进制字符的随机串(n/2 个随机字节)。 */
@@ -220,26 +154,18 @@ export function randHex(n: number): string {
 }
 
 export function uuid(): string {
-  if (globalThis.crypto && globalThis.crypto.randomUUID) return globalThis.crypto.randomUUID();
-  const b = randomBytes(16);
-  b[6] = ((b[6] || 0) & 0x0f) | 0x40;
-  b[8] = ((b[8] || 0) & 0x3f) | 0x80;
-  const h = bytesToHex(b);
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+  return crypto.randomUUID();
 }
 
 /** SAPISIDHASH 鉴权头(对 "<ts> <sapisid> <origin>" 做 SHA-1)。 */
 export let _sapisidHashCache: { key: string; value: string } = { key: "", value: "" };
 
 export async function makeSapisidHash(sapisid: string): Promise<string> {
-  if (!globalThis.crypto || !globalThis.crypto.subtle) {
-    throw new Error("crypto.subtle is required to build SAPISIDHASH");
-  }
   const ts = nowSec();
   const cacheKey = `${ts}\x00${sapisid}`;
   if (_sapisidHashCache.key === cacheKey) return _sapisidHashCache.value;
   const data = TEXT_ENCODER.encode(`${ts} ${sapisid} https://gemini.google.com`);
-  const buf = await globalThis.crypto.subtle.digest("SHA-1", data);
+  const buf = await crypto.subtle.digest("SHA-1", data);
   const hex = bytesToHex(new Uint8Array(buf));
   const value = `SAPISIDHASH ${ts}_${hex}`;
   _sapisidHashCache = { key: cacheKey, value };

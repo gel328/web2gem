@@ -83,12 +83,7 @@ export function splitSetCookieHeader(header: unknown): string[] {
 }
 
 export function setCookieHeaders(headers: Headers): string[] {
-  const withGetSetCookie = headers as Headers & { getSetCookie?: () => string[] };
-  if (typeof withGetSetCookie.getSetCookie === "function") {
-    const values = withGetSetCookie.getSetCookie();
-    if (values.length) return values;
-  }
-  return splitSetCookieHeader(headers.get("set-cookie") || "");
+  return headers.getSetCookie();
 }
 
 export function mergeSetCookieHeaders(cookieHeader: unknown, setCookieValues: readonly string[]): string {
@@ -183,6 +178,7 @@ async function rotateGeminiCookieOnce(cfg: RuntimeConfig, state: ActiveCookieSta
       body: '[000,"-0000000000000000000"]',
       timeoutMs: Math.min(Math.max(Number(cfg.request_timeout_sec) || 30, 1) * 1000, 30000),
       socket: cfg.upstream_socket,
+      socketFallback: "never",
       cfg,
     });
     if (resp.status === 401 || resp.status === 403) {

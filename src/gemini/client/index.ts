@@ -60,6 +60,7 @@ async function fetchGeminiStreamGenerate(
     body: requestBody,
     timeoutMs: cfg.request_timeout_sec * 1000,
     socket: cfg.upstream_socket,
+    socketFallback: "never",
     signal,
     cfg,
   });

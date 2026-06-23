@@ -13,17 +13,9 @@ export const cases = [
       assert.equal(result.usage.uploadedFiles, 0);
     });
   }],
-  ["reports missing base64 decoder when no native or atob decoder exists", async () => {
-    const original = Object.getOwnPropertyDescriptor(Uint8Array, "fromBase64");
-    Object.defineProperty(Uint8Array, "fromBase64", { value: undefined, configurable: true, writable: true });
-    try {
-      await withPatchedGlobal("atob", undefined, async () => {
-        await assert.rejects(() => mod.base64ToBytes("AAAA"), /base64 decoder is not available/);
-      });
-    } finally {
-      if (original) Object.defineProperty(Uint8Array, "fromBase64", original);
-      else delete Uint8Array.fromBase64;
-    }
+  ["decodes base64 through the native Uint8Array runtime", async () => {
+    assert.deepEqual(Array.from(mod.base64ToBytes("aGVsbG8")), [104, 101, 108, 108, 111]);
+    assert.deepEqual(Array.from(mod.base64ToBytes("-_8")), [251, 255]);
   }],
   ["uploads direct images through preferred multipart without content-push auth", async () => {
     mod.resetActiveGeminiCookieForTest();
@@ -157,6 +149,42 @@ export const cases = [
     });
     assert.deepEqual(requests, ["https://content-push.googleapis.com/upload"]);
   }],
+  ["refreshes stale cached Gemini push IDs after upload token rejection", async () => {
+    mod.resetActiveGeminiCookieForTest();
+    mod.resetGeminiUploadCachesForTest();
+    const cache = createMemoryCache();
+    const requests = [];
+    const pushIds = [];
+    await withCaches(cache, async () => {
+      await mod.setCachedGeminiPushId(baseUploadCfg(), "push-stale");
+      mod.resetGeminiUploadCachesForTest();
+      await withFetch(async (url, init = {}) => {
+        const href = String(url);
+        requests.push(href);
+        if (href === "https://content-push.googleapis.com/upload") {
+          pushIds.push(init.headers["Push-ID"]);
+          assertPreferredMultipart(init, { filename: "message.txt", mime: "text/plain; charset=utf-8", bodyText: "hello" });
+          return pushIds.length === 1
+            ? new Response("stale token", { status: 415 })
+            : new Response("/uploaded/refreshed-text-ref", { status: 200 });
+        }
+        if (href === "https://gemini.example/app") {
+          return new Response('{"qKIAYe":"push-fresh"}', { status: 200 });
+        }
+        throw new Error(`unexpected fetch ${href}`);
+      }, async () => {
+        const ref = await mod.uploadTextFile(baseUploadCfg({ cookie: "__Secure-1PSID=psid" }), "hello", "message.txt");
+        assert.deepEqual(ref, { ref: "/uploaded/refreshed-text-ref", name: "message.txt" });
+      });
+      assert.equal(await mod.getCachedGeminiPushId(baseUploadCfg()), "push-fresh");
+    });
+    assert.deepEqual(requests, [
+      "https://content-push.googleapis.com/upload",
+      "https://gemini.example/app",
+      "https://content-push.googleapis.com/upload",
+    ]);
+    assert.deepEqual(pushIds, ["push-stale", "push-fresh"]);
+  }],
   ["does not cache page-token fetch failures as successful empty token results", async () => {
     mod.resetActiveGeminiCookieForTest();
     mod.resetGeminiUploadCachesForTest();
@@ -275,6 +303,7 @@ export const cases = [
     assert.deepEqual(seen.map((item) => item.href), [
       "https://gemini.example/app",
       "https://content-push.googleapis.com/upload",
+      "https://gemini.example/app",
     ]);
   }],
   ["does not send auth fallback after multipart returns an invalid file ref", async () => {
@@ -391,19 +420,15 @@ export const cases = [
     const original = Object.getOwnPropertyDescriptor(Uint8Array, "fromBase64");
     Object.defineProperty(Uint8Array, "fromBase64", {
       value() {
-        throw new Error("fromBase64 should not be called for oversized input");
+        throw new Error("Uint8Array.fromBase64 should not be called for oversized input");
       },
       configurable: true,
       writable: true,
     });
     try {
-      await withPatchedGlobal("atob", () => {
-        throw new Error("atob should not be called for oversized input");
-      }, async () => {
-        const result = await mod.resolveFiles(baseUploadCfg({ generic_file_upload_max_bytes: 2 }), [{ b64: "AAAA", mime: "application/octet-stream" }]);
-        assert.equal(result.fileRefs, null);
-        assert.match(result.droppedNote, /file attachment is too large/);
-      });
+      const result = await mod.resolveFiles(baseUploadCfg({ generic_file_upload_max_bytes: 2 }), [{ b64: "AAAA", mime: "application/octet-stream" }]);
+      assert.equal(result.fileRefs, null);
+      assert.match(result.droppedNote, /file attachment is too large/);
     } finally {
       if (original) Object.defineProperty(Uint8Array, "fromBase64", original);
       else delete Uint8Array.fromBase64;

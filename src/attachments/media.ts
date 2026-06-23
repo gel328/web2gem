@@ -330,44 +330,25 @@ export function validateBase64Shape(raw: unknown): string {
 export function base64ToBytes(b64: unknown): Uint8Array {
   const compact = validateBase64Shape(b64);
   const hasBase64UrlAlphabet = /[-_]/.test(compact);
-  const fromBase64 = (Uint8Array as Uint8ArrayConstructor & { fromBase64?: (value: string, options?: { alphabet?: "base64" | "base64url" }) => Uint8Array }).fromBase64;
-  if (typeof fromBase64 === "function") {
-    try {
-      return fromBase64(compact, hasBase64UrlAlphabet ? { alphabet: "base64url" } : undefined);
-    } catch (_) {
-      // Older runtimes may expose fromBase64 without base64url or unpadded input support.
-    }
-  }
-  const normalized = hasBase64UrlAlphabet ? compact.replace(/-/g, "+").replace(/_/g, "/") : compact;
-  const padded = normalized + "===".slice((normalized.length + 3) % 4);
-  if (typeof fromBase64 === "function") return fromBase64(padded);
-  if (typeof atob === "function") {
-    const bin = atob(padded);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  }
-  throw new Error("base64 decoder is not available in this runtime");
+  return (Uint8Array as Uint8ArrayBase64Constructor).fromBase64(
+    compact,
+    hasBase64UrlAlphabet ? { alphabet: "base64url" } : undefined,
+  );
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i] || 0);
-  if (typeof btoa === "function") return btoa(bin);
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 3) {
-    const a = bytes[i] || 0;
-    const b = bytes[i + 1] || 0;
-    const c = bytes[i + 2] || 0;
-    const n = (a << 16) | (b << 8) | c;
-    out += chars[(n >> 18) & 63];
-    out += chars[(n >> 12) & 63];
-    out += i + 1 < bytes.length ? chars[(n >> 6) & 63] : "=";
-    out += i + 2 < bytes.length ? chars[n & 63] : "=";
-  }
-  return out;
+  return (bytes as Uint8ArrayBase64).toBase64();
 }
+
+type Uint8ArrayBase64Alphabet = "base64" | "base64url";
+
+type Uint8ArrayBase64Constructor = typeof Uint8Array & {
+  fromBase64(value: string, options?: { alphabet?: Uint8ArrayBase64Alphabet }): Uint8Array;
+};
+
+type Uint8ArrayBase64 = Uint8Array & {
+  toBase64(options?: { alphabet?: Uint8ArrayBase64Alphabet; omitPadding?: boolean }): string;
+};
 
 function uploadInputFromParsed(parsed: ParsedUploadUrl, explicitMime: string, filename: string): UploadFileInput {
   const out: UploadFileInput = {

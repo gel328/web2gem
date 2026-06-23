@@ -83,7 +83,7 @@ const structuredPatternRequirement = {
     },
   },
 };
-const base64Input = Buffer.from(makeBytes(BASE64_BYTES)).toString("base64");
+const base64Input = makeBytes(BASE64_BYTES).toBase64();
 const appPageTokensHtml = makeAppHtml(APP_HTML_BYTES, '{"qKIAYe":"push-bench","SNlM0e":"at-bench"}');
 const appBuildLabelHtml = makeAppHtml(APP_HTML_BYTES, '<script>{"cfb2h":"bench-bl"}</script>');
 const structuredJsonNoise = "{".repeat(STRUCTURED_JSON_NOISE_BYTES);

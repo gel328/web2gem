@@ -1,4 +1,4 @@
-import { abortError, canFallbackAfterSocketError, errorLogSummary, isAbortError, linkedSignal, log, throwIfAborted, timeoutSignal } from "../../shared/runtime";
+import { abortError, canFallbackAfterSocketError, errorLogSummary, isAbortError, log, throwIfAborted, timeoutSignal } from "../../shared/runtime";
 import { getDefaultSocketPool, resolveConnect, socketHttp } from "./socket";
 import type { SocketHttpResponse } from "./socket";
 
@@ -10,6 +10,7 @@ type HttpFetchOptions = {
   body?: HttpBodyInit | null | undefined;
   timeoutMs?: number;
   socket?: boolean;
+  socketFallback?: "pre-response" | "never";
   signal?: AbortSignal | null | undefined;
   cfg?: { log_requests?: unknown } | null;
   acceptCompressed?: boolean;
@@ -18,7 +19,7 @@ type HttpFetchOptions = {
 // 统一上游入口:socket 优先,失败/不可用则回退 fetch。返回类 Response 对象。
 export async function httpFetch(
   url: string,
-  { method = "GET", headers = {}, body, timeoutMs = 180000, socket = true, signal, cfg, acceptCompressed }: HttpFetchOptions = {},
+  { method = "GET", headers = {}, body, timeoutMs = 180000, socket = true, socketFallback = "pre-response", signal, cfg, acceptCompressed }: HttpFetchOptions = {},
 ): Promise<Response | SocketHttpResponse> {
   throwIfAborted(signal);
   if (socket) {
@@ -38,6 +39,10 @@ export async function httpFetch(
         return resp;
       } catch (e) {
         if (isAbortError(e) || (signal && signal.aborted)) throw abortError(signal);
+        if (socketFallback === "never") {
+          log(cfg, `socket upstream failed; fallback disabled for ${method}: ${errorLogSummary(e)}`);
+          throw e;
+        }
         if (!canFallbackAfterSocketError(method, e)) {
           log(cfg, `socket upstream failed; not falling back after upstream response for ${method}: ${errorLogSummary(e)}`);
           throw e;
@@ -63,8 +68,5 @@ function linkedFetchSignal(
 ): { signal: AbortSignal | undefined; cleanup: () => void } {
   if (!signal) return { signal: timeout, cleanup() {} };
   if (!timeout) return { signal, cleanup() {} };
-  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.any === "function") {
-    return { signal: AbortSignal.any([signal, timeout]), cleanup() {} };
-  }
-  return linkedSignal(signal, timeout);
+  return { signal: AbortSignal.any([signal, timeout]), cleanup() {} };
 }

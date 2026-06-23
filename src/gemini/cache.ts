@@ -86,6 +86,14 @@ export function createOriginScopedStringCache(options: OriginScopedStringCacheOp
     }
   };
 
+  const deleteCached = async (cfg: RuntimeConfig): Promise<void> => {
+    const origin = geminiOrigin(cfg);
+    clearL1(origin);
+    const cache = workerCache();
+    if (!cache) return;
+    await cache.delete(cacheKey(origin)).catch(() => false);
+  };
+
   const setCached = async (cfg: RuntimeConfig, rawValue: string): Promise<void> => {
     const value = validString(rawValue);
     if (!value) return;
@@ -121,6 +129,7 @@ export function createOriginScopedStringCache(options: OriginScopedStringCacheOp
   return {
     getCached,
     setCached,
+    deleteCached,
     getFresh,
     reset(): void {
       clearL1();

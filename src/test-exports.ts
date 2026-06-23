@@ -22,7 +22,6 @@ export {
   canFallbackAfterSocketError,
   errorLogSummary,
   isAbortError,
-  linkedSignal,
   log,
   logInfo,
   logStage,
@@ -60,7 +59,7 @@ export { base64ToBytes } from "./attachments/media";
 export { collectOpenAIInlineUploadImages, collectOpenAIRequestAttachmentPlan } from "./attachments/collect-openai";
 export { createAttachmentPlan } from "./attachments/plan";
 export { droppedAttachmentNote } from "./attachments/notes";
-export { getCachedGeminiPushId, getGeminiPushId, getPageTokens, resetGeminiUploadCachesForTest, setCachedGeminiPushId } from "./gemini/uploads/tokens";
+export { getCachedGeminiPushId, getGeminiPushId, getPageTokens, refreshGeminiPushId, resetGeminiUploadCachesForTest, setCachedGeminiPushId } from "./gemini/uploads/tokens";
 export { resolveFiles, resolveImages, uploadImage, uploadTextFile } from "./gemini/uploads/execute";
 export {
   contextFilePromptByteCheck,
