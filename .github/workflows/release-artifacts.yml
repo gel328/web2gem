@@ -97,6 +97,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Derive release version
+        id: release_version
+        run: |
+          set -euo pipefail
+          echo "version=${RELEASE_TAG#v}" >> "${GITHUB_OUTPUT}"
+
       - name: Extract Docker metadata
         id: meta_release
         uses: docker/metadata-action@v5
@@ -105,6 +111,7 @@ jobs:
             ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=${{ env.RELEASE_TAG }}
+            type=raw,value=${{ steps.release_version.outputs.version }}
             type=raw,value=latest
 
       - name: Build and Push Docker Image

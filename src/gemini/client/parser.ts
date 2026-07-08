@@ -257,12 +257,9 @@ function parseFramedWrbEnvelopes(raw: string): unknown[][] {
   while (pos < source.length) {
     pos = skipFrameWhitespace(source, pos);
     if (pos >= source.length) break;
-    const marker = /^(\d+)\n/.exec(source.slice(pos));
+    const marker = readFrameLengthMarker(source, pos);
     if (!marker) break;
-    const lengthText = marker[1] || "";
-    const frameLength = Number(lengthText);
-    if (!Number.isSafeInteger(frameLength) || frameLength <= 0) break;
-    const contentStart = pos + marker[0].length;
+    const { frameLength, contentStart } = marker;
     const contentEnd = contentStart + frameLength;
     if (contentEnd > source.length) break;
     const chunk = source.slice(contentStart, contentEnd).trim();
@@ -277,6 +274,23 @@ function parseFramedWrbEnvelopes(raw: string): unknown[][] {
     out.push(...collectWrbEnvelopes(parsed));
   }
   return out;
+}
+
+function readFrameLengthMarker(source: string, pos: number): { frameLength: number; contentStart: number } | null {
+  let i = pos;
+  let frameLength = 0;
+  while (i < source.length) {
+    const code = source.charCodeAt(i);
+    if (code === 10) {
+      if (i === pos || !Number.isSafeInteger(frameLength) || frameLength <= 0) return null;
+      return { frameLength, contentStart: i + 1 };
+    }
+    if (code < 48 || code > 57) return null;
+    frameLength = frameLength * 10 + code - 48;
+    if (!Number.isSafeInteger(frameLength)) return null;
+    i += 1;
+  }
+  return null;
 }
 
 function skipFrameWhitespace(source: string, index: number): number {

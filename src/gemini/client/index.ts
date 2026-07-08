@@ -288,9 +288,10 @@ function generatedImageFetchHeaders(cfg: RuntimeConfig): Record<string, string> 
 }
 
 async function responseBytes(resp: Response | { body: ReadableStream<Uint8Array>; arrayBuffer?: undefined }): Promise<Uint8Array> {
-  if ("arrayBuffer" in resp && typeof resp.arrayBuffer === "function") {
-    return new Uint8Array(await resp.arrayBuffer());
+  if ("bytes" in resp && typeof resp.bytes === "function") {
+    return resp.bytes();
   }
+  if (!resp.body) return new Uint8Array(0);
   const reader = resp.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;

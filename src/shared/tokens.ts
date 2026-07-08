@@ -155,8 +155,10 @@ export function asTokenText(v: unknown): string {
 }
 
 function firstNonASCIIIndex(source: string): number {
-  if (!source) return -1;
-  return source.search(/[^\x00-\x7F]/);
+  for (let i = 0; i < source.length; i++) {
+    if (source.charCodeAt(i) > 0x7F) return i;
+  }
+  return -1;
 }
 
 export function promptByteLength(v: unknown): number {

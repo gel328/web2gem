@@ -229,6 +229,7 @@ export const cases = [
     assert.equal(mod.extractResponseParts(")]}'\n\n0\n[]").candidateCount, 0);
     assert.equal(mod.extractResponseParts(")]}'\n\n999\n[]").candidateCount, 0);
     assert.equal(mod.extractResponseParts(")]}'\n\n5\nnot-json").candidateCount, 0);
+    assert.equal(mod.extractResponseParts(")]}'\n\n1x\n[]").candidateCount, 0);
   }],
   ["extracts image-to-image generated image path and does not merge alternatives", async () => {
     const first = [];

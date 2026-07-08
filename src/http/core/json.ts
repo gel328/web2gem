@@ -9,7 +9,7 @@ export type ReadJsonRequestResult =
   | { error: string; status: number; code?: string; value?: undefined; text?: undefined; bytes?: undefined };
 
 export type ReadRequestBodyBytesResult =
-  | { value: ArrayBuffer; bytes: number; error?: undefined; status?: undefined; code?: undefined }
+  | { value: Uint8Array; bytes: number; error?: undefined; status?: undefined; code?: undefined }
   | { error: string; status: number; code?: string; value?: undefined; bytes?: undefined };
 
 export type ReadJsonRequestOptions = {
@@ -76,13 +76,13 @@ async function readRequestBodyBounded(
   request: Request,
   maxBodyBytes: number | null,
   oversizedError?: ReadJsonRequestOptions["oversizedError"],
-): Promise<ArrayBuffer> {
-  if (maxBodyBytes == null) return request.arrayBuffer();
+): Promise<Uint8Array> {
+  if (maxBodyBytes == null) return request.bytes();
   const contentLength = requestContentLength(request);
   if (contentLength != null && contentLength > maxBodyBytes) {
     throw readJsonRequestError(oversizedError || oversizedBodyError(contentLength, maxBodyBytes));
   }
-  if (!request.body) return request.arrayBuffer();
+  if (!request.body) return request.bytes();
   const reader = request.body.getReader();
   let out = contentLength != null ? new Uint8Array(contentLength) : null;
   let chunks: Uint8Array[] | null = out ? null : [];
@@ -115,15 +115,15 @@ async function readRequestBodyBounded(
   } finally {
     try { reader.releaseLock(); } catch (_) {}
   }
-  if (out) return total === out.byteLength ? out.buffer : out.buffer.slice(0, total);
-  if (!chunks) return new ArrayBuffer(0);
+  if (out) return total === out.byteLength ? out : out.subarray(0, total);
+  if (!chunks) return new Uint8Array(0);
   const merged = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {
     merged.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return merged.buffer;
+  return merged;
 }
 
 export function requestContentLength(request: Request): number | null {

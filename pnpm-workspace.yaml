@@ -4,7 +4,6 @@ allowBuilds:
   sharp: true
   workerd: true
 minimumReleaseAgeExclude:
-  - '@cloudflare/workers-types@4.20260616.1'
   - '@cloudflare/workers-types@5.20260708.1'
   - '@biomejs/biome@2.5.3'
   - '@biomejs/cli-darwin-arm64@2.5.3'

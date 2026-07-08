@@ -56,6 +56,15 @@ export function nowSec(): number {
 }
 
 export function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  const wait = schedulerWait();
+  if (wait) {
+    if (!signal) return wait(ms);
+    throwIfAborted(signal);
+    return wait(ms, { signal }).catch((error: unknown) => {
+      if (signal.aborted) throw abortError(signal);
+      throw error;
+    });
+  }
   if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
@@ -69,6 +78,13 @@ export function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+type SchedulerWait = (ms: number, options?: { signal?: AbortSignal | null }) => Promise<void>;
+
+function schedulerWait(): SchedulerWait | null {
+  const scheduler = (globalThis as unknown as { scheduler?: { wait?: SchedulerWait } }).scheduler;
+  return typeof scheduler?.wait === "function" ? scheduler.wait.bind(scheduler) : null;
 }
 
 export function timeoutSignal(ms: unknown): AbortSignal | undefined {

@@ -660,6 +660,28 @@ export const cases = [
     assert.deepEqual(valid.value, { ok: true });
     assert.equal(valid.bytes > 0, true);
 
+    let nativeBytesCalled = false;
+    const nativeBytesRequest = new Request("https://worker.example/", {
+      method: "POST",
+      body: "{}",
+    });
+    Object.defineProperty(nativeBytesRequest, "bytes", {
+      configurable: true,
+      value: async () => {
+        nativeBytesCalled = true;
+        return new TextEncoder().encode("{\"ok\":\"bytes\"}");
+      },
+    });
+    Object.defineProperty(nativeBytesRequest, "arrayBuffer", {
+      configurable: true,
+      value: async () => {
+        throw new Error("arrayBuffer should not be used");
+      },
+    });
+    const nativeBytes = await mod.readJsonRequest(nativeBytesRequest);
+    assert.deepEqual(nativeBytes.value, { ok: "bytes" });
+    assert.equal(nativeBytesCalled, true);
+
     const declaredLarge = await mod.readJsonRequest(new Request("https://worker.example/", {
       method: "POST",
       headers: { "Content-Length": "1000" },

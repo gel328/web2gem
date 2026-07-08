@@ -374,7 +374,7 @@ async function appendMultipartImageFile(inputs: ImageGenerationUserImageInput[],
 
   let bytes: Uint8Array;
   try {
-    bytes = new Uint8Array(await file.arrayBuffer());
+    bytes = await file.bytes();
   } catch (_) {
     return { response: openAIErrorResponse("failed to read multipart image file", 400, "image_input_unsupported") };
   }
