@@ -234,7 +234,7 @@ docker run --rm -p 52389:52389 --env-file .env web2gem:<tag>
 
 | 变量                            | 默认值                      | 说明                                                                                                                                                                               |
 | ------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `API_KEYS`                      | empty                       | 逗号分隔或 JSON 数组形式的 API keys。为空时关闭认证。                                                                                                                              |
+| `API_KEYS`                      | empty                       | 逗号分隔或 JSON 数组形式的 API keys。为空时关闭认证；空成员、非字符串成员和重复项会被拒绝。                                                                                                                              |
 | `GEMINI_COOKIE`                 | empty                       | 原始 Gemini cookie 字符串；或包含 `cookie` 和可选 `sapisid` 的 JSON；或包含 `secure_1psid`、`secure_1psidts` 和可选 `sapisid` 的 JSON。真实 Pro 路由、大上下文文本附件和已登录 Gemini Web 行为需要它。 |
 | `SAPISID`                       | empty                       | 可选 SAPISID 覆盖值。为空时会尽量从 `GEMINI_COOKIE` 提取。                                                                                                                         |
 | `GEMINI_BL`                     | bundled value               | 上游请求使用的 Gemini Web build label。如果 Gemini Web 变化导致上游响应为空，需要更新它。                                                                                          |
