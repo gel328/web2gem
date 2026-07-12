@@ -7,10 +7,9 @@
 ## Workflow Layout
 
 - `.github/workflows/quality-gates.yml` runs pull request, `dev`, and `main` quality checks.
-- `.github/workflows/release-artifacts.yml` builds GitHub Release assets and publishes the GHCR image for a release tag.
+- `.github/workflows/release-artifacts.yml` is the reusable publication workflow. It builds GitHub Release assets, publishes GHCR, and can publish the same release image to Docker Hub and Aliyun.
 - `.github/workflows/reusable-versioned-release.yml` owns shared version calculation, package version update, release gates, commit, tag push, and release revision output.
-- `.github/workflows/release-dockerhub.yml` calls the reusable versioned release workflow, then publishes Docker Hub images.
-- `.github/workflows/release.yml` calls the reusable versioned release workflow, then publishes Aliyun Container Registry images.
+- `.github/workflows/release.yml` is the single manual versioned-release entrypoint. It calls the reusable version workflow once, then calls the publication workflow with the captured revision.
 
 Keep workflow names stable unless the GitHub Actions UI and README are updated together.
 
@@ -56,6 +55,77 @@ Registry-specific release workflows should not duplicate the version bump / tag 
 - `revision_sha`
 
 Registry publish jobs should check out `revision_sha` before building Docker images so image labels and contents match the version commit.
+
+## Scenario: Unified Release Publication
+
+### 1. Scope / Trigger
+
+Use this contract when changing registry publication, GitHub Release assets, release workflow inputs, or Docker build reuse.
+
+### 2. Signatures
+
+- `release.yml` inputs: `version_type`, `publish_dockerhub`, `publish_aliyun`.
+- `release-artifacts.yml` reusable inputs: `release_tag`, `revision_sha`, `prepared_revision`, `publish_dockerhub`, `publish_aliyun`.
+- `reusable-versioned-release.yml` outputs: `new_version`, `new_tag`, `revision_sha`.
+
+### 3. Contracts
+
+- A manual release calls the version-authority workflow exactly once.
+- All registry tags and release assets use the returned `revision_sha`.
+- The publication workflow always publishes GHCR and may add Docker Hub/Aliyun tags when their boolean inputs are true.
+- Selected registry credentials must be validated before the image build; credentials stay out of the version-authority job.
+- Use one multi-platform publication build containing all requested registry tags.
+- Platform archive exports use the same checked-out revision, labels, and explicit GHA cache scope.
+- Keep the release-event and manual-tag entrypoints for publishing an existing tag; they run canonical release gates unless `prepared_revision` is true from the version-authority caller.
+
+### 4. Validation & Error Matrix
+
+- Prepared versioned release -> skip duplicate release gates, build/publish the captured revision.
+- Existing tag publication -> run canonical release gates before publication.
+- Docker Hub selected with missing username/token -> fail before registry login/build.
+- Aliyun selected with incomplete registry/namespace/user/password -> fail before registry login/build.
+- Optional registry not selected -> do not expose or use that registry's credentials/tags.
+
+### 5. Good/Base/Bad Cases
+
+- Good: one prepare call followed by one reusable publication call with immutable outputs.
+- Base: publish GHCR, Worker asset, archives, and checksums with both optional registries disabled.
+- Bad: separate Docker Hub and Aliyun workflows each bump the package version and create their own tag.
+- Bad: invoke `docker/build-push-action` once per registry for the same revision.
+
+### 6. Tests Required
+
+- Assert `release.yml` calls both reusable workflows and contains no image build.
+- Assert the publication workflow exposes the reusable inputs and contains exactly one multi-registry `docker/build-push-action` step.
+- Assert the old independent Docker Hub versioned workflow does not exist.
+- Assert publication and archive builds share an explicit cache scope.
+- Preserve explicit asset-name and checksum validation.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```yaml
+jobs:
+  dockerhub:
+    uses: ./.github/workflows/reusable-versioned-release.yml
+  aliyun:
+    uses: ./.github/workflows/reusable-versioned-release.yml
+```
+
+#### Correct
+
+```yaml
+jobs:
+  prepare:
+    uses: ./.github/workflows/reusable-versioned-release.yml
+  publish:
+    needs: prepare
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.new_tag }}
+      revision_sha: ${{ needs.prepare.outputs.revision_sha }}
+```
 
 ## Scenario: Manual Versioned Release Source
 

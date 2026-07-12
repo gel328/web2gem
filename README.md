@@ -355,6 +355,8 @@ The build script emits two bundles:
 | `dist/worker.js`      | `src/index.ts`      | Production Worker deployed by Wrangler.         |
 | `dist/worker.test.js` | `src/test-index.ts` | Local test bundle with internal helper exports. |
 
+Maintainers create a versioned `main` release from **Actions → Versioned Release**. One run creates the version/tag and publishes GHCR plus any selected Docker Hub or Aliyun targets from the same immutable revision.
+
 ## Testing
 
 | Command             | Description                                                                                                                     |

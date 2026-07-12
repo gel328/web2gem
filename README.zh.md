@@ -355,6 +355,8 @@ pnpm smoke
 | `dist/worker.js`      | `src/index.ts`      | 由 Wrangler 部署的生产 Worker。   |
 | `dist/worker.test.js` | `src/test-index.ts` | 带内部辅助导出的本地测试 bundle。 |
 
+维护者通过 **Actions → Versioned Release** 创建 `main` 的版本发布。一次运行会创建版本与 tag，并从同一个不可变 revision 发布 GHCR 及所选的 Docker Hub 或阿里云镜像。
+
 ## 测试
 
 | 命令                | 说明                                                                                       |
